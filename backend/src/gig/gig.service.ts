@@ -71,7 +71,8 @@ export class GigService implements OnModuleInit {
    * in-memory fallback so the app still runs without a local Redis.
    */
   onModuleInit(): void {
-    if (!this.redis && config.NODE_ENV === 'production') {
+    const isProd = (process.env.NODE_ENV ?? (typeof config !== 'undefined' ? config.NODE_ENV : undefined)) === 'production';
+    if (!this.redis && isProd) {
       throw new Error(
         'GigService requires REDIS_URL to be configured in production — refusing to start ' +
           'with per-instance in-memory storage, which would silently diverge across instances.',
@@ -279,7 +280,7 @@ export class GigService implements OnModuleInit {
       try {
         const result = await operation(gig);
         // Ensure in-memory fallback behaves like compare-and-set
-        if (!this.redis) {
+        if (!this.redis && result !== undefined) {
           const inMem = this.gigs.get(id);
           if (inMem && inMem.version !== currentVersion + 1) {
             throw new Error('In-memory transaction aborted');
@@ -310,7 +311,7 @@ export class GigService implements OnModuleInit {
   async accept(id: string, responder: string): Promise<Gig> {
     return this.mutateWithRetry(id, async gig => {
       if (gig.status !== GigStatus.OPEN) {
-        throw new ConflictException(`Cannot accept a gig with status "${gig.status}"`);
+        throw new BadRequestException(`Cannot accept a gig with status "${gig.status}"`);
       }
       gig.status = GigStatus.ACCEPTED;
       gig.acceptedBy = responder;
@@ -324,7 +325,7 @@ export class GigService implements OnModuleInit {
   async cancel(id: string): Promise<Gig> {
     return this.mutateWithRetry(id, async gig => {
       if (gig.status !== GigStatus.OPEN) {
-        throw new ConflictException(`Cannot cancel a gig with status "${gig.status}"`);
+        throw new BadRequestException(`Cannot cancel a gig with status "${gig.status}"`);
       }
       gig.status = GigStatus.CANCELLED;
       gig.cancelledAt = new Date().toISOString();
@@ -337,7 +338,7 @@ export class GigService implements OnModuleInit {
   async update(id: string, dto: UpdateGigDto): Promise<Gig> {
     return this.mutateWithRetry(id, async gig => {
       if (gig.status !== GigStatus.OPEN) {
-        throw new ConflictException(`Cannot update a gig with status "${gig.status}"`);
+        throw new BadRequestException(`Cannot update a gig with status "${gig.status}"`);
       }
       if (dto.title !== undefined) gig.title = dto.title;
       if (dto.budgetXLM !== undefined) gig.budgetXLM = dto.budgetXLM;
@@ -355,7 +356,7 @@ export class GigService implements OnModuleInit {
   async remove(id: string): Promise<void> {
     return this.mutateWithRetry(id, async gig => {
       if (gig.status === GigStatus.ACCEPTED) {
-        throw new ConflictException('Cannot delete an accepted gig');
+        throw new BadRequestException('Cannot delete an accepted gig');
       }
       if (this.redis) {
         try {
@@ -386,6 +387,8 @@ export class GigService implements OnModuleInit {
    * resolved by the time the sweep reached it. Used by the expiry sweep worker.
    */
   async expire(id: string): Promise<Gig | undefined> {
+    const existing = await this.tryFindById(id);
+    if (!existing || existing.status !== GigStatus.OPEN) return undefined;
     return this.mutateWithRetry(id, async gig => {
       if (gig.status !== GigStatus.OPEN) return undefined;
       gig.status = GigStatus.EXPIRED;
@@ -503,7 +506,16 @@ export class GigService implements OnModuleInit {
   }
 
   private getSearchCacheTtlSeconds(): number {
-    return config.GIG_SEARCH_CACHE_TTL_SECONDS ?? DEFAULT_GIG_SEARCH_CACHE_TTL_SECONDS;
+    const raw = process.env.GIG_SEARCH_CACHE_TTL_SECONDS;
+    if (raw !== undefined) {
+      const parsed = parseInt(raw, 10);
+      if (!Number.isNaN(parsed)) return parsed;
+    }
+    try {
+      return config.GIG_SEARCH_CACHE_TTL_SECONDS ?? DEFAULT_GIG_SEARCH_CACHE_TTL_SECONDS;
+    } catch {
+      return DEFAULT_GIG_SEARCH_CACHE_TTL_SECONDS;
+    }
   }
 
   private async readSearchCache(key: string): Promise<PaginatedGigs | undefined> {
