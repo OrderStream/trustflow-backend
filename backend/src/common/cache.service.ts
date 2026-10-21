@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { createClient, RedisClientType } from 'redis';
+import { config } from '../config/env.config';
 
 export interface CacheEntry<T> {
   data: T;
@@ -23,7 +24,19 @@ export class CacheService {
    * Connect to Redis — falls back to in-memory cache if unavailable
    */
   private async connect(): Promise<void> {
-    const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
+    let redisUrl: string | undefined;
+    try {
+      redisUrl = config.REDIS_URL;
+    } catch {
+      redisUrl = undefined;
+    }
+
+    if (!redisUrl) {
+      this.logger.warn('REDIS_URL not set — using in-memory cache fallback');
+      this.redisAvailable = false;
+      return;
+    }
+
     try {
       this.client = createClient({ url: redisUrl });
       this.client.on('error', err => {
