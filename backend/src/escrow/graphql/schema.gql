@@ -33,6 +33,13 @@ type Escrow {
   stellarTxHash: String
 }
 
+type EscrowPage {
+  data: [Escrow!]!
+  limit: Int!
+  offset: Int!
+  total: Int!
+}
+
 type JurorVote {
   createdAt: String!
   deliverableId: String!
@@ -56,7 +63,7 @@ type Milestone {
 
 type Query {
   escrow(id: String!): Escrow
-  escrows: [Escrow!]!
+  escrows(limit: Int = 20, offset: Int = 0): EscrowPage!
 }
 
 type UserProfile {
